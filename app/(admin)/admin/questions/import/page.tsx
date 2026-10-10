@@ -14,13 +14,13 @@ import { cn } from '@/lib/utils'
 
 const rowSchema = z.object({
   question: z.string().trim().min(1, 'Question is required'),
-  optionA: z.string().trim().min(1, 'Option A required'),
-  optionB: z.string().trim().min(1, 'Option B required'),
-  optionC: z.string().optional().default(''),
-  optionD: z.string().optional().default(''),
+  optionA: z.string().trim().optional().default(''),
+  optionB: z.string().trim().optional().default(''),
+  optionC: z.string().trim().optional().default(''),
+  optionD: z.string().trim().optional().default(''),
   correctAnswer: z.string().trim().min(1, 'Right answer is required'),
-  category: z.enum(['traffic-signs', 'road-rules', 'defensive-driving', 'vehicle-knowledge']).default('road-rules'),
-  difficulty: z.enum(['easy', 'medium', 'hard']).default('easy'),
+  category: z.string().trim().optional().default('road-rules'),
+  difficulty: z.string().trim().optional().default('easy'),
   explanation: z.string().optional().default(''),
   image: z.string().optional().default(''),
 })
@@ -33,7 +33,7 @@ interface ParsedRow {
   result: { ok: true; value: ImportRow } | { ok: false; errors: string[] }
 }
 
-const TEMPLATE_COLUMNS = ['Question', 'Option A', 'Option B', 'Option C', 'Option D', 'Correct Answer', 'Category', 'Difficulty', 'Explanation', 'Image']
+const TEMPLATE_COLUMNS = ['Question Number', 'Question', 'Option A', 'Option B', 'Option C', 'Option D', 'Right Answer', 'Category', 'Difficulty', 'Instruction / Explanation', 'Image']
 
 export default function ImportQuestionsPage() {
   const router = useRouter()
@@ -71,15 +71,15 @@ export default function ImportQuestionsPage() {
 
       const parsed: ParsedRow[] = json.map((raw, i) => {
         const data = {
-          question: valueFor(raw, ['question', 'questiontext', 'prompt']),
+          question: valueFor(raw, ['question', 'questiontext', 'prompt', 'questiontext']),
           optionA: valueFor(raw, ['optiona', 'a', 'answer1', 'choicea']),
           optionB: valueFor(raw, ['optionb', 'b', 'answer2', 'choiceb']),
           optionC: valueFor(raw, ['optionc', 'c', 'answer3', 'choicec']),
           optionD: valueFor(raw, ['optiond', 'd', 'answer4', 'choiced']),
-          correctAnswer: valueFor(raw, ['correctanswer', 'rightanswer', 'answer', 'correct', 'key']),
+          correctAnswer: valueFor(raw, ['correctanswer', 'rightanswer', 'answer', 'correct', 'key', 'right']),
           category: valueFor(raw, ['category', 'module']) || 'road-rules',
           difficulty: valueFor(raw, ['difficulty', 'level']) || 'easy',
-          explanation: valueFor(raw, ['explanation', 'rationale', 'reason']),
+          explanation: valueFor(raw, ['explanation', 'rationale', 'reason', 'instruction']),
           image: valueFor(raw, ['image', 'imageurl']),
         }
         const result = rowSchema.safeParse(data)
@@ -103,20 +103,45 @@ export default function ImportQuestionsPage() {
   const downloadTemplate = () => {
     const sample = [
       {
+        'Question Number': 1,
         Question: 'What does a flashing yellow traffic light mean?',
         'Option A': 'Stop and wait',
         'Option B': 'Proceed with caution',
         'Option C': 'Speed up',
         'Option D': 'Turn around',
-        'Correct Answer': 'B',
+        'Right Answer': 'B',
         Category: 'traffic-signs',
         Difficulty: 'easy',
-        Explanation: 'A flashing yellow light means slow down and proceed with caution.',
+        'Instruction / Explanation': 'A flashing yellow light means slow down and proceed with caution.',
+        Image: '',
+      },
+      {
+        'Question Number': 2,
+        Question: 'Write the next question here.',
+        'Option A': '',
+        'Option B': '',
+        'Option C': '',
+        'Option D': '',
+        'Right Answer': 'Write the correct answer here.',
+        Category: 'road-rules',
+        Difficulty: 'easy',
+        'Instruction / Explanation': 'Optional instructions or explanation.',
         Image: '',
       },
     ]
     const ws = XLSX.utils.json_to_sheet(sample, { header: TEMPLATE_COLUMNS })
+    const instructions = [
+      ['DrivePrep question import template'],
+      ['Instructions'],
+      ['1. Keep the header names in row 1. Add questions starting at row 2 and continue numbering from 1 upward; any number of rows is supported.'],
+      ['2. Question and Right Answer are required. Option A-D are optional for a question-and-answer format.'],
+      ['3. Right Answer may be A, B, C, D, 1, 2, 3, 4, or the exact answer text.'],
+      ['4. Category, Difficulty, Image, and Instruction / Explanation are optional.'],
+      ['5. Downloaded rows are validated first. Only valid rows are saved to the Turso question bank after confirmation.'],
+    ]
+    const instructionSheet = XLSX.utils.aoa_to_sheet(instructions)
     const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, instructionSheet, 'Instructions')
     XLSX.utils.book_append_sheet(wb, ws, 'Questions')
     XLSX.writeFile(wb, 'driveprep-question-template.xlsx')
   }
@@ -127,13 +152,16 @@ export default function ImportQuestionsPage() {
     const questions: Omit<Question, 'id'>[] = rows.flatMap((r) => {
       if (!r.result.ok) return []
       const v = r.result.value
+      const answerText = v.correctAnswer.trim()
       const options = [v.optionA, v.optionB, v.optionC, v.optionD].map((o) => o.trim()).filter(Boolean)
-      const answer = v.correctAnswer.trim().toLowerCase()
+      const answer = answerText.toLowerCase()
+      if (options.length === 0) options.push(answerText)
       const letterIndex = ['a', 'b', 'c', 'd'].indexOf(answer.replace(/[^a-d]/g, ''))
       const numericIndex = ['1', '2', '3', '4'].indexOf(answer)
       const textIndex = options.findIndex((option) => option.toLowerCase() === answer)
       const correctIndex = letterIndex >= 0 ? letterIndex : numericIndex >= 0 ? numericIndex : textIndex
-      return [{ moduleId: v.category, type: 'single', text: v.question.trim(), options, correct: [correctIndex >= 0 ? correctIndex : 0], difficulty: v.difficulty, explanation: v.explanation.trim() || 'Review the rule and select the best answer.' }]
+      const difficulty = ['easy', 'medium', 'hard'].includes(v.difficulty.toLowerCase()) ? v.difficulty.toLowerCase() as Question['difficulty'] : 'easy'
+      return [{ moduleId: v.category, type: 'single', text: v.question.trim(), options, correct: [correctIndex >= 0 ? correctIndex : 0], difficulty, explanation: v.explanation.trim() || 'Review the rule and select the best answer.' }]
     })
     try {
       const response = await fetch('/api/admin/questions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ questions }) })
