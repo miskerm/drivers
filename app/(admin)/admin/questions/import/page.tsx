@@ -63,40 +63,57 @@ export default function ImportQuestionsPage() {
     try {
       const buffer = await file.arrayBuffer()
       const workbook = XLSX.read(buffer, { type: 'array' })
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      if (!sheet) throw new Error('The spreadsheet has no sheets.')
-      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
       const key = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
-      const valueFor = (raw: Record<string, unknown>, aliases: string[]) => {
-        const entry = Object.entries(raw).find(([name]) => aliases.includes(key(name)))
-        return String(entry?.[1] ?? '').trim()
-      }
+      const clean = (value: unknown) => String(value ?? '').replace(/\s+/g, ' ').trim()
+      const questionLabels = new Set(['question', 'questiontext', 'prompt', 'questiontitle'])
+      const answerLabels = new Set(['answer', 'rightanswer', 'correctanswer', 'correct', 'key', 'right'])
+      const optionLabels = new Set(['optiona', 'optionb', 'optionc', 'optiond', 'choicea', 'choiceb', 'choicec', 'choiced', 'a', 'b', 'c', 'd'])
+      const metadataLabels = new Set(['category', 'module', 'difficulty', 'level', 'explanation', 'rationale', 'reason', 'instruction', 'image', 'imageurl'])
 
-      const parsed: ParsedRow[] = json.map((raw, i) => {
+      // Read every cell as text. Headers, row numbers, and column positions are optional.
+      // A question can be followed by its answer in the same row or in the next cell/row.
+      const candidateSheets = workbook.SheetNames.map((name) => ({
+        name,
+        rows: XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name], { header: 1, defval: '' }),
+      }))
+      const source = candidateSheets.find(({ rows }) => rows.some((cells) => cells.some((cell) => questionLabels.has(key(clean(cell))))) ) ?? candidateSheets[0]
+      if (!source) throw new Error('The spreadsheet has no sheets.')
+
+      const parsed: ParsedRow[] = []
+      let pendingQuestion = ''
+      source.rows.forEach((cells, index) => {
+        const values = cells.map(clean).filter(Boolean)
+        if (!values.length) return
         const data = {
-          question: valueFor(raw, ['question', 'questiontext', 'prompt', 'questiontext']),
-          optionA: valueFor(raw, ['optiona', 'a', 'answer1', 'choicea']),
-          optionB: valueFor(raw, ['optionb', 'b', 'answer2', 'choiceb']),
-          optionC: valueFor(raw, ['optionc', 'c', 'answer3', 'choicec']),
-          optionD: valueFor(raw, ['optiond', 'd', 'answer4', 'choiced']),
-          correctAnswer: valueFor(raw, ['correctanswer', 'rightanswer', 'answer', 'correct', 'key', 'right']),
-          category: valueFor(raw, ['category', 'module']) || 'road-rules',
-          difficulty: valueFor(raw, ['difficulty', 'level']) || 'easy',
-          explanation: valueFor(raw, ['explanation', 'rationale', 'reason', 'instruction']),
-          image: valueFor(raw, ['image', 'imageurl']),
+          question: '', optionA: '', optionB: '', optionC: '', optionD: '', correctAnswer: '',
+          category: 'road-rules', difficulty: 'easy', explanation: '', image: '',
         }
-        const question = questionSchema.safeParse(data)
-        const answer = answerSchema.safeParse({ correctAnswer: data.correctAnswer })
-        return {
-          row: i + 2,
-          data,
-          questionResult: question.success ? { ok: true, value: question.data } : { ok: false, errors: question.error.issues.map((issue) => issue.message) },
-          answerResult: answer.success ? { ok: true, value: answer.data.correctAnswer } : { ok: false, errors: answer.error.issues.map((issue) => issue.message) },
-        }
+        let unlabeled: string[] = []
+        cells.forEach((cell, cellIndex) => {
+          const value = clean(cell)
+          if (!value) return
+          const label = key(value)
+          const next = clean(cells[cellIndex + 1])
+          if (questionLabels.has(label)) data.question = next
+          else if (answerLabels.has(label)) data.correctAnswer = next
+          else if (optionLabels.has(label)) data[`option${label.slice(-1).toUpperCase()}` as 'optionA' | 'optionB' | 'optionC' | 'optionD'] = next
+          else if (metadataLabels.has(label)) {
+            const field = label === 'module' ? 'category' : label === 'level' ? 'difficulty' : label === 'rationale' || label === 'reason' || label === 'instruction' ? 'explanation' : label === 'imageurl' ? 'image' : label as keyof typeof data
+            if (field in data) data[field] = next
+          } else if (!Object.values([...questionLabels, ...answerLabels, ...optionLabels, ...metadataLabels]).includes(label)) unlabeled.push(value)
+        })
+        if (!data.question && unlabeled.length) data.question = pendingQuestion || unlabeled[0]
+        if (!data.correctAnswer && unlabeled.length > (pendingQuestion ? 0 : 1)) data.correctAnswer = unlabeled[pendingQuestion ? 0 : 1]
+        if (data.question && data.correctAnswer) {
+          pendingQuestion = ''
+          const question = questionSchema.safeParse(data)
+          const answer = answerSchema.safeParse({ correctAnswer: data.correctAnswer })
+          parsed.push({ row: index + 1, data, questionResult: question.success ? { ok: true, value: question.data } : { ok: false, errors: question.error.issues.map((issue) => issue.message) }, answerResult: answer.success ? { ok: true, value: answer.data.correctAnswer } : { ok: false, errors: answer.error.issues.map((issue) => issue.message) } })
+        } else if (data.question) pendingQuestion = data.question
       })
 
       if (parsed.length === 0) {
-        setError('No data rows found. Check that row 1 contains the column headers.')
+        setError('No question-and-answer pairs found. The importer ignores row and column numbers; put a question and its answer anywhere in the sheet.')
         setRows(null)
       } else {
         setRows(parsed)
