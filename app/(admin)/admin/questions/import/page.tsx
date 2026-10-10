@@ -21,7 +21,8 @@ const rowSchema = z.object({
   correctAnswer: z.enum(['A', 'B', 'C', 'D'], { message: 'Correct answer must be A, B, C or D' }),
   category: z.enum(['traffic-signs', 'road-rules', 'defensive-driving', 'vehicle-knowledge'], { message: 'Unknown category' }),
   difficulty: z.enum(['easy', 'medium', 'hard'], { message: 'Difficulty must be easy, medium or hard' }),
-  explanation: z.string().min(10, 'Explanation too short (min 10 chars)'),
+  // Explanations are optional metadata; a valid question and answer must not be rejected for a short explanation.
+  explanation: z.string().optional().default(''),
   image: z.string().optional().default(''),
 })
 
@@ -69,18 +70,26 @@ export default function ImportQuestionsPage() {
         return key ? raw[key] : ''
       }
 
+      const normalizeCorrectAnswer = (value: unknown) => {
+        const answer = String(value ?? '').trim().toUpperCase()
+        const match = answer.match(/(?:OPTION\s*)?([ABCD])(?:\b|$)/)
+        if (match) return match[1]
+        const numeric = Number.parseInt(answer, 10)
+        return numeric >= 1 && numeric <= 4 ? ['A', 'B', 'C', 'D'][numeric - 1] : answer
+      }
+
       const parsed: ParsedRow[] = json.map((raw, i) => {
         const data = {
-          question: String(getCell(raw, 'Question')).trim(),
-          optionA: String(getCell(raw, 'Option A')).trim(),
-          optionB: String(getCell(raw, 'Option B')).trim(),
-          optionC: String(getCell(raw, 'Option C')).trim(),
-          optionD: String(getCell(raw, 'Option D')).trim(),
-          correctAnswer: String(getCell(raw, 'Correct Answer')).trim().toUpperCase(),
-          category: String(getCell(raw, 'Category')).trim().toLowerCase(),
-          difficulty: String(getCell(raw, 'Difficulty')).trim().toLowerCase(),
-          explanation: String(getCell(raw, 'Explanation')).trim(),
-          image: String(getCell(raw, 'Image')).trim(),
+          question: String(getCell(raw, 'Question') ?? '').trim(),
+          optionA: String(getCell(raw, 'Option A') ?? '').trim(),
+          optionB: String(getCell(raw, 'Option B') ?? '').trim(),
+          optionC: String(getCell(raw, 'Option C') ?? '').trim(),
+          optionD: String(getCell(raw, 'Option D') ?? '').trim(),
+          correctAnswer: normalizeCorrectAnswer(getCell(raw, 'Correct Answer')),
+          category: String(getCell(raw, 'Category') ?? '').trim().toLowerCase(),
+          difficulty: String(getCell(raw, 'Difficulty') ?? '').trim().toLowerCase(),
+          explanation: String(getCell(raw, 'Explanation') ?? '').trim(),
+          image: String(getCell(raw, 'Image') ?? '').trim(),
         }
         const result = rowSchema.safeParse(data)
         return result.success ? { row: i + 2, data, result: { ok: true, value: result.data } } : { row: i + 2, data, result: { ok: false, errors: result.error.issues.map((issue) => issue.message) } }
