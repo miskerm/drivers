@@ -30,13 +30,19 @@ export async function getQuestion(id: string): Promise<Question | undefined> {
 }
 
 export async function createQuestion(input: Omit<Question, 'id'>): Promise<Question> {
-  const id = `q-${Date.now().toString(36)}`
+  const id = `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
   await executeRun(
     `INSERT INTO questions (id, module_id, type, text, options, correct, difficulty, explanation)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, input.moduleId, input.type, input.text, JSON.stringify(input.options), JSON.stringify(input.correct), input.difficulty, input.explanation]
   )
   return { ...input, id }
+}
+
+export async function createQuestions(inputs: Omit<Question, 'id'>[]): Promise<Question[]> {
+  const questions: Question[] = []
+  for (const input of inputs) questions.push(await createQuestion(input))
+  return questions
 }
 
 export async function updateQuestion(id: string, patch: Partial<Question>): Promise<void> {

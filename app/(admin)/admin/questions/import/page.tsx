@@ -9,19 +9,19 @@ import { ArrowLeft, CircleAlert, CircleCheck, Download, FileSpreadsheet, Upload 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { createQuestion } from '@/lib/question-store'
+import type { Question } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const rowSchema = z.object({
-  question: z.string().min(10, 'Question text too short (min 10 chars)'),
-  optionA: z.string().min(1, 'Option A required'),
-  optionB: z.string().min(1, 'Option B required'),
+  question: z.string().trim().min(1, 'Question is required'),
+  optionA: z.string().trim().min(1, 'Option A required'),
+  optionB: z.string().trim().min(1, 'Option B required'),
   optionC: z.string().optional().default(''),
   optionD: z.string().optional().default(''),
-  correctAnswer: z.enum(['A', 'B', 'C', 'D'], { message: 'Correct answer must be A, B, C or D' }),
-  category: z.enum(['traffic-signs', 'road-rules', 'defensive-driving', 'vehicle-knowledge'], { message: 'Unknown category' }),
-  difficulty: z.enum(['easy', 'medium', 'hard'], { message: 'Difficulty must be easy, medium or hard' }),
-  explanation: z.string().min(10, 'Explanation too short (min 10 chars)'),
+  correctAnswer: z.string().trim().min(1, 'Right answer is required'),
+  category: z.enum(['traffic-signs', 'road-rules', 'defensive-driving', 'vehicle-knowledge']).default('road-rules'),
+  difficulty: z.enum(['easy', 'medium', 'hard']).default('easy'),
+  explanation: z.string().optional().default(''),
   image: z.string().optional().default(''),
 })
 
@@ -63,19 +63,24 @@ export default function ImportQuestionsPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]]
       if (!sheet) throw new Error('The spreadsheet has no sheets.')
       const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+      const key = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
+      const valueFor = (raw: Record<string, unknown>, aliases: string[]) => {
+        const entry = Object.entries(raw).find(([name]) => aliases.includes(key(name)))
+        return String(entry?.[1] ?? '').trim()
+      }
 
       const parsed: ParsedRow[] = json.map((raw, i) => {
         const data = {
-          question: String(raw['Question'] ?? ''),
-          optionA: String(raw['Option A'] ?? ''),
-          optionB: String(raw['Option B'] ?? ''),
-          optionC: String(raw['Option C'] ?? ''),
-          optionD: String(raw['Option D'] ?? ''),
-          correctAnswer: String(raw['Correct Answer'] ?? '').trim().toUpperCase(),
-          category: String(raw['Category'] ?? '').trim().toLowerCase(),
-          difficulty: String(raw['Difficulty'] ?? '').trim().toLowerCase(),
-          explanation: String(raw['Explanation'] ?? ''),
-          image: String(raw['Image'] ?? ''),
+          question: valueFor(raw, ['question', 'questiontext', 'prompt']),
+          optionA: valueFor(raw, ['optiona', 'a', 'answer1', 'choicea']),
+          optionB: valueFor(raw, ['optionb', 'b', 'answer2', 'choiceb']),
+          optionC: valueFor(raw, ['optionc', 'c', 'answer3', 'choicec']),
+          optionD: valueFor(raw, ['optiond', 'd', 'answer4', 'choiced']),
+          correctAnswer: valueFor(raw, ['correctanswer', 'rightanswer', 'answer', 'correct', 'key']),
+          category: valueFor(raw, ['category', 'module']) || 'road-rules',
+          difficulty: valueFor(raw, ['difficulty', 'level']) || 'easy',
+          explanation: valueFor(raw, ['explanation', 'rationale', 'reason']),
+          image: valueFor(raw, ['image', 'imageurl']),
         }
         const result = rowSchema.safeParse(data)
         return result.success ? { row: i + 2, data, result: { ok: true, value: result.data } } : { row: i + 2, data, result: { ok: false, errors: result.error.issues.map((issue) => issue.message) } }
@@ -116,24 +121,27 @@ export default function ImportQuestionsPage() {
     XLSX.writeFile(wb, 'driveprep-question-template.xlsx')
   }
 
-  const confirmImport = () => {
+  const confirmImport = async () => {
     if (!rows) return
-    for (const r of rows) {
-      if (!r.result.ok) continue
+    setError(null)
+    const questions: Omit<Question, 'id'>[] = rows.flatMap((r) => {
+      if (!r.result.ok) return []
       const v = r.result.value
       const options = [v.optionA, v.optionB, v.optionC, v.optionD].map((o) => o.trim()).filter(Boolean)
-      const correctIndex = ['A', 'B', 'C', 'D'].indexOf(v.correctAnswer)
-      createQuestion({
-        moduleId: v.category,
-        type: 'single',
-        text: v.question.trim(),
-        options,
-        correct: [correctIndex >= 0 ? correctIndex : 0],
-        difficulty: v.difficulty,
-        explanation: v.explanation.trim(),
-      })
+      const answer = v.correctAnswer.trim().toLowerCase()
+      const letterIndex = ['a', 'b', 'c', 'd'].indexOf(answer.replace(/[^a-d]/g, ''))
+      const numericIndex = ['1', '2', '3', '4'].indexOf(answer)
+      const textIndex = options.findIndex((option) => option.toLowerCase() === answer)
+      const correctIndex = letterIndex >= 0 ? letterIndex : numericIndex >= 0 ? numericIndex : textIndex
+      return [{ moduleId: v.category, type: 'single', text: v.question.trim(), options, correct: [correctIndex >= 0 ? correctIndex : 0], difficulty: v.difficulty, explanation: v.explanation.trim() || 'Review the rule and select the best answer.' }]
+    })
+    try {
+      const response = await fetch('/api/admin/questions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ questions }) })
+      if (!response.ok) throw new Error('Import failed')
+      setImported(true)
+    } catch {
+      setError('The spreadsheet was read, but the questions could not be saved to the database. Please try again.')
     }
-    setImported(true)
   }
 
   return (

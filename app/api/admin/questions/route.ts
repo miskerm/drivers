@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getQuestions, createQuestion, deleteQuestion, deleteQuestionsForModule } from '@/lib/db/questions'
+import { getQuestions, getQuestionsFor, createQuestion, createQuestions, deleteQuestion, deleteQuestionsForModule } from '@/lib/db/questions'
 
 export async function GET(request: NextRequest) {
   try {
@@ -16,6 +16,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
+    if (Array.isArray(body.questions)) {
+      const questions = await createQuestions(body.questions)
+      return NextResponse.json({ questions }, { status: 201 })
+    }
     const question = await createQuestion(body)
     return NextResponse.json({ question }, { status: 201 })
   } catch (e) {
