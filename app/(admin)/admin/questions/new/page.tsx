@@ -11,7 +11,7 @@ export default function NewQuestionPage() {
         <p className="mt-1.5 text-sm text-muted-foreground">Add a question to the bank. It becomes available to questionnaires immediately.</p>
       </header>
       <div className="rounded-2xl border border-border/70 bg-card p-6 shadow-[0_1px_3px_rgb(16_24_40/0.05)]">
-        <QuestionForm submitLabel="Create question" onSubmit={(values) => createQuestion({ ...values, correct: [values.correct] })} />
+        <QuestionForm submitLabel="Create question" onSubmit={async (values) => { await createQuestion({ ...values, correct: [values.correct] }) }} />
       </div>
     </div>
   )

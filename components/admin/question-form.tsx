@@ -28,7 +28,7 @@ export function QuestionForm({
 }: {
   initial?: QuestionFormValues
   submitLabel: string
-  onSubmit: (values: QuestionFormValues) => void
+  onSubmit: (values: QuestionFormValues) => void | Promise<void>
 }) {
   const router = useRouter()
   const { modules } = useModules()
@@ -43,15 +43,22 @@ export function QuestionForm({
     setValues((v) => ({ ...v, options: v.options.map((o, oi) => (oi === i ? value : o)) }))
   }
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (values.text.trim().length < 10) return setError('Question text must be at least 10 characters.')
-    if (values.options.filter((o) => o.trim()).length < 2) return setError('Provide at least 2 non-empty options.')
-    if (!values.options[values.correct]?.trim()) return setError('The marked correct answer must be a non-empty option.')
-    if (values.explanation.trim().length < 10) return setError('An explanation of at least 10 characters is required.')
+    const questionText = values.text.trim()
+    const options = values.type === 'truefalse' ? ['True', 'False'] : values.options.map((option) => option.trim()).filter(Boolean)
+
+    if (!questionText) return setError('Question text is required.')
+    if (options.length < 2) return setError('Provide at least 2 answer options.')
+    if (!options[values.correct]?.trim()) return setError('The marked correct answer must be a non-empty option.')
+
     setError(null)
-    onSubmit(values)
-    router.push('/admin/questions')
+    try {
+      await onSubmit({ ...values, text: questionText, options })
+      router.push('/admin/questions')
+    } catch {
+      setError('Could not save the question. Please check the database connection and try again.')
+    }
   }
 
   return (
