@@ -12,25 +12,26 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { Question } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-const rowSchema = z.object({
+const questionSchema = z.object({
   question: z.string().trim().min(1, 'Question is required'),
   optionA: z.string().trim().optional().default(''),
   optionB: z.string().trim().optional().default(''),
   optionC: z.string().trim().optional().default(''),
   optionD: z.string().trim().optional().default(''),
-  correctAnswer: z.string().trim().min(1, 'Right answer is required'),
   category: z.string().trim().optional().default('road-rules'),
   difficulty: z.string().trim().optional().default('easy'),
   explanation: z.string().optional().default(''),
   image: z.string().optional().default(''),
 })
 
-type ImportRow = z.infer<typeof rowSchema>
+const answerSchema = z.object({ correctAnswer: z.string().trim().min(1, 'Right answer is required') })
+type ImportRow = z.infer<typeof questionSchema> & z.infer<typeof answerSchema>
 
 interface ParsedRow {
   row: number
   data: Record<string, unknown>
-  result: { ok: true; value: ImportRow } | { ok: false; errors: string[] }
+  questionResult: { ok: true; value: z.infer<typeof questionSchema> } | { ok: false; errors: string[] }
+  answerResult: { ok: true; value: string } | { ok: false; errors: string[] }
 }
 
 const TEMPLATE_COLUMNS = ['Question Number', 'Question', 'Option A', 'Option B', 'Option C', 'Option D', 'Right Answer', 'Category', 'Difficulty', 'Instruction / Explanation', 'Image']
@@ -44,7 +45,9 @@ export default function ImportQuestionsPage() {
   const [imported, setImported] = useState(false)
   const [parsing, setParsing] = useState(false)
 
-  const validCount = rows?.filter((r) => r.result.ok).length ?? 0
+  const validCount = rows?.filter((r) => r.questionResult.ok && r.answerResult.ok).length ?? 0
+  const questionCount = rows?.filter((r) => r.questionResult.ok).length ?? 0
+  const answerCount = rows?.filter((r) => r.answerResult.ok).length ?? 0
   const invalidCount = (rows?.length ?? 0) - validCount
 
   const handleFile = async (file: File | undefined) => {
@@ -82,8 +85,14 @@ export default function ImportQuestionsPage() {
           explanation: valueFor(raw, ['explanation', 'rationale', 'reason', 'instruction']),
           image: valueFor(raw, ['image', 'imageurl']),
         }
-        const result = rowSchema.safeParse(data)
-        return result.success ? { row: i + 2, data, result: { ok: true, value: result.data } } : { row: i + 2, data, result: { ok: false, errors: result.error.issues.map((issue) => issue.message) } }
+        const question = questionSchema.safeParse(data)
+        const answer = answerSchema.safeParse({ correctAnswer: data.correctAnswer })
+        return {
+          row: i + 2,
+          data,
+          questionResult: question.success ? { ok: true, value: question.data } : { ok: false, errors: question.error.issues.map((issue) => issue.message) },
+          answerResult: answer.success ? { ok: true, value: answer.data.correctAnswer } : { ok: false, errors: answer.error.issues.map((issue) => issue.message) },
+        }
       })
 
       if (parsed.length === 0) {
@@ -150,8 +159,8 @@ export default function ImportQuestionsPage() {
     if (!rows) return
     setError(null)
     const questions: Omit<Question, 'id'>[] = rows.flatMap((r) => {
-      if (!r.result.ok) return []
-      const v = r.result.value
+      if (!r.questionResult.ok || !r.answerResult.ok) return []
+      const v = { ...r.questionResult.value, correctAnswer: r.answerResult.value }
       const answerText = v.correctAnswer.trim()
       const options = [v.optionA, v.optionB, v.optionC, v.optionD].map((o) => o.trim()).filter(Boolean)
       const answer = answerText.toLowerCase()
@@ -218,8 +227,8 @@ export default function ImportQuestionsPage() {
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-bold">{fileName}</p>
               <p className="text-xs text-muted-foreground">
-                {rows.length} rows parsed · <span className="font-semibold text-green-600">{validCount} valid</span>
-                {invalidCount > 0 && <> · <span className="font-semibold text-destructive">{invalidCount} invalid</span></>}
+                {rows.length} rows parsed · <span className="font-semibold text-green-600">{questionCount} questions valid</span> · <span className="font-semibold text-green-600">{answerCount} answers valid</span>
+                {invalidCount > 0 && <> · <span className="font-semibold text-destructive">{invalidCount} incomplete</span></>}
               </p>
             </div>
             <div className="flex gap-2.5">
@@ -262,7 +271,7 @@ export default function ImportQuestionsPage() {
               </TableHeader>
               <TableBody>
                 {rows.map((r) => (
-                  <TableRow key={r.row} className={cn(!r.result.ok && 'bg-red-50/50')}>
+                  <TableRow key={r.row} className={cn(!(r.questionResult.ok && r.answerResult.ok) && 'bg-red-50/50')}>
                     <TableCell className="pl-5 text-muted-foreground">{r.row}</TableCell>
                     <TableCell className="max-w-sm">
                       <p className="truncate font-semibold">{String(r.data.question) || '—'}</p>
@@ -270,18 +279,14 @@ export default function ImportQuestionsPage() {
                     <TableCell className="text-muted-foreground">{String(r.data.category) || '—'}</TableCell>
                     <TableCell className="text-muted-foreground">{String(r.data.difficulty) || '—'}</TableCell>
                     <TableCell className="pr-5">
-                      {r.result.ok ? (
-                        <Badge variant="success">Valid</Badge>
-                      ) : (
-                        <div className="flex flex-col items-start gap-1">
-                          <Badge variant="destructive">Invalid</Badge>
-                          {r.result.errors.slice(0, 2).map((err, i) => (
-                            <p key={i} className="text-xs text-destructive">
-                              {err}
-                            </p>
-                          ))}
+                      <div className="flex flex-col items-start gap-1">
+                        <div className="flex gap-1.5">
+                          {r.questionResult.ok ? <Badge variant="success">Question valid</Badge> : <Badge variant="destructive">Question invalid</Badge>}
+                          {r.answerResult.ok ? <Badge variant="success">Answer valid</Badge> : <Badge variant="destructive">Answer invalid</Badge>}
                         </div>
-                      )}
+                        {!r.questionResult.ok && r.questionResult.errors.slice(0, 1).map((err, i) => <p key={`q-${i}`} className="text-xs text-destructive">Question: {err}</p>)}
+                        {!r.answerResult.ok && r.answerResult.errors.slice(0, 1).map((err, i) => <p key={`a-${i}`} className="text-xs text-destructive">Answer: {err}</p>)}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
