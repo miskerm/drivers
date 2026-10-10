@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getQuestions, createQuestion, deleteQuestion, deleteQuestionsForModule } from '@/lib/db/questions'
+import { getQuestions, getQuestionsFor, createQuestion, deleteQuestionsForModule } from '@/lib/db/questions'
 
 export async function GET(request: NextRequest) {
   try {
@@ -10,6 +10,19 @@ export async function GET(request: NextRequest) {
   } catch (e) {
     console.error('GET /api/admin/questions error:', e)
     return NextResponse.json({ error: 'Failed to fetch questions' }, { status: 500 })
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const moduleId = searchParams.get('moduleId')
+    if (!moduleId) return NextResponse.json({ error: 'moduleId is required' }, { status: 400 })
+    await deleteQuestionsForModule(moduleId)
+    return NextResponse.json({ success: true })
+  } catch (e) {
+    console.error('DELETE /api/admin/questions error:', e)
+    return NextResponse.json({ error: 'Failed to delete questions' }, { status: 500 })
   }
 }
 

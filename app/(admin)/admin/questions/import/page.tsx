@@ -13,7 +13,7 @@ import { createQuestion } from '@/lib/question-store'
 import { cn } from '@/lib/utils'
 
 const rowSchema = z.object({
-  question: z.string().min(10, 'Question text too short (min 10 chars)'),
+  question: z.string().trim().min(1, 'Question text is required'),
   optionA: z.string().min(1, 'Option A required'),
   optionB: z.string().min(1, 'Option B required'),
   optionC: z.string().optional().default(''),
@@ -63,19 +63,24 @@ export default function ImportQuestionsPage() {
       const sheet = workbook.Sheets[workbook.SheetNames[0]]
       if (!sheet) throw new Error('The spreadsheet has no sheets.')
       const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+      const normalizeHeader = (header: string) => header.replace(/^\uFEFF/, '').trim().toLowerCase().replace(/[\s_-]+/g, '')
+      const getCell = (raw: Record<string, unknown>, expected: string) => {
+        const key = Object.keys(raw).find((candidate) => normalizeHeader(candidate) === normalizeHeader(expected))
+        return key ? raw[key] : ''
+      }
 
       const parsed: ParsedRow[] = json.map((raw, i) => {
         const data = {
-          question: String(raw['Question'] ?? ''),
-          optionA: String(raw['Option A'] ?? ''),
-          optionB: String(raw['Option B'] ?? ''),
-          optionC: String(raw['Option C'] ?? ''),
-          optionD: String(raw['Option D'] ?? ''),
-          correctAnswer: String(raw['Correct Answer'] ?? '').trim().toUpperCase(),
-          category: String(raw['Category'] ?? '').trim().toLowerCase(),
-          difficulty: String(raw['Difficulty'] ?? '').trim().toLowerCase(),
-          explanation: String(raw['Explanation'] ?? ''),
-          image: String(raw['Image'] ?? ''),
+          question: String(getCell(raw, 'Question')).trim(),
+          optionA: String(getCell(raw, 'Option A')).trim(),
+          optionB: String(getCell(raw, 'Option B')).trim(),
+          optionC: String(getCell(raw, 'Option C')).trim(),
+          optionD: String(getCell(raw, 'Option D')).trim(),
+          correctAnswer: String(getCell(raw, 'Correct Answer')).trim().toUpperCase(),
+          category: String(getCell(raw, 'Category')).trim().toLowerCase(),
+          difficulty: String(getCell(raw, 'Difficulty')).trim().toLowerCase(),
+          explanation: String(getCell(raw, 'Explanation')).trim(),
+          image: String(getCell(raw, 'Image')).trim(),
         }
         const result = rowSchema.safeParse(data)
         return result.success ? { row: i + 2, data, result: { ok: true, value: result.data } } : { row: i + 2, data, result: { ok: false, errors: result.error.issues.map((issue) => issue.message) } }
@@ -116,24 +121,31 @@ export default function ImportQuestionsPage() {
     XLSX.writeFile(wb, 'driveprep-question-template.xlsx')
   }
 
-  const confirmImport = () => {
+  const confirmImport = async () => {
     if (!rows) return
-    for (const r of rows) {
-      if (!r.result.ok) continue
-      const v = r.result.value
-      const options = [v.optionA, v.optionB, v.optionC, v.optionD].map((o) => o.trim()).filter(Boolean)
-      const correctIndex = ['A', 'B', 'C', 'D'].indexOf(v.correctAnswer)
-      createQuestion({
-        moduleId: v.category,
-        type: 'single',
-        text: v.question.trim(),
-        options,
-        correct: [correctIndex >= 0 ? correctIndex : 0],
-        difficulty: v.difficulty,
-        explanation: v.explanation.trim(),
-      })
+    setError(null)
+    try {
+      const validRows = rows.filter((r): r is ParsedRow & { result: { ok: true; value: ImportRow } } => r.result.ok)
+      await Promise.all(validRows.map(({ result }) => {
+        const v = result.value
+        const options = [v.optionA, v.optionB, v.optionC, v.optionD].map((o) => o.trim()).filter(Boolean)
+        const correctIndex = ['A', 'B', 'C', 'D'].indexOf(v.correctAnswer)
+        return createQuestion({
+          moduleId: v.category,
+          type: 'single',
+          text: v.question.trim(),
+          options,
+          correct: [correctIndex >= 0 ? correctIndex : 0],
+          difficulty: v.difficulty,
+          explanation: v.explanation.trim(),
+        })
+      }))
+      setImported(true)
+      router.push('/admin/questions')
+      router.refresh()
+    } catch {
+      setError('Import failed. No questions were confirmed as imported. Please check the database connection and try again.')
     }
-    setImported(true)
   }
 
   return (

@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import { Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
+import * as XLSX from 'xlsx'
+import { Download, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
@@ -41,6 +42,24 @@ export default function AdminQuestionsPage() {
     setTimeout(() => setDeleted(false), 4000)
   }
 
+  const exportQuestions = () => {
+    const data = filtered.map((question) => ({
+      Question: question.text,
+      'Option A': question.options[0] ?? '',
+      'Option B': question.options[1] ?? '',
+      'Option C': question.options[2] ?? '',
+      'Option D': question.options[3] ?? '',
+      'Correct Answer': question.correct.map((index) => ['A', 'B', 'C', 'D'][index] ?? '').join(', '),
+      Category: question.moduleId,
+      Difficulty: question.difficulty,
+      Explanation: question.explanation,
+    }))
+    const worksheet = XLSX.utils.json_to_sheet(data)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Questions')
+    XLSX.writeFile(workbook, 'driveprep-questions.xlsx')
+  }
+
   return (
     <div className="mx-auto max-w-6xl">
       <header className="flex flex-wrap items-center justify-between gap-4">
@@ -49,6 +68,9 @@ export default function AdminQuestionsPage() {
           <p className="mt-1.5 text-sm text-muted-foreground sm:text-base">{questions.length} questions in the bank across all modules.</p>
         </div>
         <div className="flex gap-2.5">
+          <button type="button" onClick={exportQuestions} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-semibold transition-colors hover:bg-muted">
+            <Download className="size-4" /> Export Excel
+          </button>
           <Link href="/admin/questions/import" className="flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-semibold transition-colors hover:bg-muted">
             <Upload className="size-4" /> Import Excel
           </Link>
