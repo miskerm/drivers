@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react'
 import Link from 'next/link'
 import * as XLSX from 'xlsx'
+import mammoth from 'mammoth'
 import { z } from 'zod'
 import { ArrowLeft, CircleAlert, CircleCheck, Download, FileSpreadsheet, Upload } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -36,11 +37,22 @@ function sheetRows(file: ArrayBuffer) {
   return workbook.SheetNames.flatMap((name) => XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name], { header: 1, defval: '' }))
 }
 function sequence(numbers: number[]) {
-  const sorted = [...new Set(numbers)].sort((a, b) => a - b)
+  const sorted = [...numbers].sort((a, b) => a - b)
   return sorted.length > 0 && sorted.every((number, index) => number === index + 1)
 }
-function readQuestionFile(buffer: ArrayBuffer): QuestionRow[] {
-  const rows = sheetRows(buffer)
+function parseDocumentText(text: string) {
+  return text.split(/\\r?\\n/).map((line) => [line]).filter((row) => clean(row[0]))
+}
+async function documentRows(file: File) {
+  const buffer = await file.arrayBuffer()
+  if (file.name.toLowerCase().endsWith('.docx')) {
+    const result = await mammoth.extractRawText({ arrayBuffer: buffer })
+    return parseDocumentText(result.value)
+  }
+  const workbook = XLSX.read(buffer, { type: 'array' })
+  return workbook.SheetNames.flatMap((name) => XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name], { header: 1, defval: '' }))
+}
+function readQuestionFile(rows: unknown[][]): QuestionRow[] {
   const parsed: QuestionRow[] = []
   let current: Partial<QuestionRow> | null = null
 
@@ -87,8 +99,8 @@ function readQuestionFile(buffer: ArrayBuffer): QuestionRow[] {
   finish(rows.length)
   return parsed
 }
-function readAnswerFile(buffer: ArrayBuffer): AnswerRow[] {
-  return sheetRows(buffer).flatMap((cells, rowIndex) => {
+function readAnswerFile(rows: unknown[][]): AnswerRow[] {
+  return rows.flatMap((cells, rowIndex) => {
     const values = cells.map(clean).filter(Boolean); if (!values.length) return []
     let number = Number(values.find((value) => /^\d+$/.test(value)) ?? 0); let answer = ''; let explanation = ''
     cells.forEach((cell, i) => { const label = key(cell); const next = clean(cells[i + 1]);
@@ -109,7 +121,7 @@ export default function ImportQuestionsPage() {
   const [preview, setPreview] = useState<PreviewRow[] | null>(null), [error, setError] = useState<string | null>(null), [imported, setImported] = useState(false)
   const readFile = async (file: File, kind: 'question' | 'answer') => {
     setError(null); setImported(false)
-    try { const buffer = await file.arrayBuffer(); const parsed = kind === 'question' ? readQuestionFile(buffer) : readAnswerFile(buffer)
+    try { const rows = await documentRows(file); const parsed = kind === 'question' ? readQuestionFile(rows) : readAnswerFile(rows)
       if (!parsed.length) throw new Error(`No ${kind}s were detected. Include a number starting at 1 and the ${kind} text.`)
       if (!sequence(parsed.map((row) => row.number))) throw new Error(`${kind === 'question' ? 'Questions' : 'Answers'} must be numbered consecutively starting at 1.`)
       if (kind === 'question') { setQuestions(parsed as QuestionRow[]); setQuestionFile(file.name) } else { setAnswers(parsed as AnswerRow[]); setAnswerFile(file.name) }
@@ -133,14 +145,14 @@ export default function ImportQuestionsPage() {
   }
   const downloadTemplate = () => { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Instructions'], ['Upload Questions first, numbered 1, 2, 3…'], ['Then upload Answers, using the same numbers.'], ['Answer sheet may include Explanation.']]), 'Instructions'); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ 'Question Number': 1, Question: 'Write question here', 'Option A': '', 'Option B': '', 'Option C': '', 'Option D': '', Category: 'road-rules', Difficulty: 'easy', Image: '' }], { header: columns }), 'Questions'); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ 'Question Number': 1, 'Right Answer': 'B', Explanation: 'Optional explanation' }]), 'Answers'); XLSX.writeFile(wb, 'driveprep-question-answer-template.xlsx') }
   const valid = preview?.filter((row) => row.valid).length ?? 0
-  return <div className="mx-auto max-w-5xl"><Link href="/admin/questions" className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><ArrowLeft className="size-4" /> Questions</Link><header className="mt-4 mb-6 flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-extrabold sm:text-3xl">Import questions from Excel</h1><p className="mt-1.5 text-sm text-muted-foreground">Upload the question Excel first, then the separate answer Excel. Matching uses question numbers only.</p></div><Button variant="outline" onClick={downloadTemplate}><Download className="size-4" /> Download template</Button></header>
-    <div className="grid gap-4 md:grid-cols-2"><UploadCard title="1. Questions Excel" fileName={questionFile} input={questionInput} onFile={(file) => file && readFile(file, 'question')} /><UploadCard title="2. Answers Excel" fileName={answerFile} input={answerInput} onFile={(file) => file && readFile(file, 'answer')} /></div>
+  return <div className="mx-auto max-w-5xl"><Link href="/admin/questions" className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><ArrowLeft className="size-4" /> Questions</Link><header className="mt-4 mb-6 flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-extrabold sm:text-3xl">Import questions from Excel</h1><p className="mt-1.5 text-sm text-muted-foreground">Upload questions first as .xlsx, .csv, or .docx. After the numbered questions are valid, upload the separate numbered answers file; matching uses numbers only.</p></div><Button variant="outline" onClick={downloadTemplate}><Download className="size-4" /> Download template</Button></header>
+    <div className="grid gap-4 md:grid-cols-2"><UploadCard title="1. Questions file" fileName={questionFile} input={questionInput} onFile={(file) => file && readFile(file, 'question')} /><UploadCard title="2. Answers file" fileName={answerFile} disabled={!questions} input={answerInput} onFile={(file) => file && readFile(file, 'answer')} /></div>
     {error && <p className="mt-4 flex items-center gap-2 rounded-lg bg-destructive/10 px-3.5 py-2.5 text-sm font-medium text-destructive"><CircleAlert className="size-4" /> {error}</p>}
     {questions && answers && <div className="mt-4 flex items-center gap-3 rounded-2xl border bg-card p-5"><FileSpreadsheet className="size-5 text-green-600" /><p className="flex-1 text-sm font-semibold">{questions.length} questions and {answers.length} answers loaded{preview ? ` · ${valid} matched` : ''}</p><Button onClick={matchFiles}>Validate and match</Button>{preview && <Button disabled={!valid || imported} onClick={confirmImport}>{imported ? <><CircleCheck className="size-4" /> Imported</> : <><Upload className="size-4" /> Import {valid}</>}</Button>}</div>}
     {preview && <section className="mt-4 overflow-hidden rounded-2xl border bg-card"><div className="border-b px-5 py-3.5"><h2 className="text-sm font-extrabold">Preview — nothing is inserted until import</h2></div><Table><TableHeader><TableRow><TableHead className="pl-5">Number</TableHead><TableHead>Question</TableHead><TableHead>Answer</TableHead><TableHead>Validation</TableHead></TableRow></TableHeader><TableBody>{preview.map((row) => <TableRow key={row.number}><TableCell className="pl-5">{row.number}</TableCell><TableCell className="max-w-sm truncate">{row.question.question}</TableCell><TableCell>{row.answer?.answer || '—'}</TableCell><TableCell>{row.valid ? <Badge variant="success">Question and answer valid</Badge> : <Badge variant="destructive">Answer missing</Badge>}</TableCell></TableRow>)}</TableBody></Table></section>}
   </div>
 }
-function UploadCard({ title, fileName, input, onFile }: { title: string; fileName: string | null; input: React.RefObject<HTMLInputElement | null>; onFile: (file?: File) => void }) { return <div className="rounded-2xl border-2 border-dashed bg-card p-6 text-center"><input ref={input} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => onFile(event.target.files?.[0])} /><Button variant="outline" onClick={() => input.current?.click()}><FileSpreadsheet className="size-4" /> {fileName || title}</Button>{fileName && <p className="mt-2 text-xs text-muted-foreground">Loaded and ready to validate</p>}</div> }
+function UploadCard({ title, fileName, disabled = false, input, onFile }: { title: string; fileName: string | null; disabled?: boolean; input: React.RefObject<HTMLInputElement | null>; onFile: (file?: File) => void }) { return <div className="rounded-2xl border-2 border-dashed bg-card p-6 text-center"><input ref={input} type="file" accept=".xlsx,.xls,.csv,.docx" className="hidden" disabled={disabled} onChange={(event) => onFile(event.target.files?.[0])} /><Button variant="outline" disabled={disabled} onClick={() => input.current?.click()}><FileSpreadsheet className="size-4" /> {fileName || title}</Button>{disabled && <p className="mt-2 text-xs text-muted-foreground">Upload and validate the questions first</p>}{fileName && <p className="mt-2 text-xs text-muted-foreground">Loaded and ready to validate</p>}</div> }
 
 /* The importer deliberately treats spreadsheet coordinates as optional; only the detected number and content matter. */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
