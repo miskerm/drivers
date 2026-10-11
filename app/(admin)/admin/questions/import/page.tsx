@@ -40,22 +40,52 @@ function sequence(numbers: number[]) {
   return sorted.length > 0 && sorted.every((number, index) => number === index + 1)
 }
 function readQuestionFile(buffer: ArrayBuffer): QuestionRow[] {
-  return sheetRows(buffer).flatMap((cells, rowIndex) => {
-    const values = cells.map(clean).filter(Boolean); if (!values.length) return []
+  const rows = sheetRows(buffer)
+  const parsed: QuestionRow[] = []
+  let current: Partial<QuestionRow> | null = null
+
+  const finish = (sourceRow: number) => {
+    if (!current?.number || !current.question) return
+    const result = questionSchema.safeParse(current)
+    if (result.success && !/^write or paste question/i.test(result.data.question)) {
+      parsed.push({ ...result.data, number: current.number, sourceRow })
+    }
+  }
+
+  rows.forEach((cells, rowIndex) => {
+    const values = cells.map(clean).filter(Boolean)
+    if (!values.length) return
+    const text = values.join(' ')
+    // The supplied 50-question template stores each question as “Q1 text” and
+    // its choices as “A) text”, “B) text”, etc., without column headers.
+    const questionMatch = text.match(/^Q\\s*((?:\\d\\s*)+?)(?:[:.)-]|\\s{2,})\\s*(.*)$/i)
+    if (questionMatch) {
+      finish(rowIndex)
+      current = { number: Number(questionMatch[1].replace(/\\s/g, '')), question: clean(questionMatch[2]) }
+      return
+    }
+    const optionMatch = text.match(/^([A-D])\\s*[).:-]\\s*(.*)$/i)
+    if (optionMatch && current) {
+      current[`option${optionMatch[1].toUpperCase()}` as 'optionA' | 'optionB' | 'optionC' | 'optionD'] = clean(optionMatch[2])
+      return
+    }
+
     const data: Record<string, string> = {}; let number = 0
-    cells.forEach((cell, i) => { const value = clean(cell); const label = key(value); const next = clean(cells[i + 1]);
-      if (labels.number.has(label) && /^\d+$/.test(next)) number = Number(next)
+    cells.forEach((cell, i) => { const value = clean(cell); const label = key(value); const next = clean(cells[i + 1])
+      if (labels.number.has(label) && /^\\d+$/.test(next)) number = Number(next)
       else if (labels.question.has(label)) data.question = next
       else if (labels.option.has(label)) data[`option${label.slice(-1).toUpperCase()}`] = next
       else if (labels.category.has(label)) data.category = next
       else if (labels.difficulty.has(label)) data.difficulty = next
       else if (labels.image.has(label)) data.image = next
     })
-    if (!data.question) data.question = values.find((value) => !allLabels.has(key(value)) && !/^\d+$/.test(value)) ?? ''
-    if (!number) number = Number(values.find((value) => /^\d+$/.test(value)) ?? 0)
-    const result = questionSchema.safeParse(data)
-    return result.success && number > 0 ? [{ ...result.data, number, sourceRow: rowIndex + 1 }] : []
+    if (!data.question) data.question = values.find((value) => !allLabels.has(key(value)) && !/^\\d+$/.test(value)) ?? ''
+    if (!number) number = Number(values.find((value) => /^\\d+$/.test(value)) ?? 0)
+    const result = questionSchema.safeParse({ ...data, question: data.question })
+    if (result.success && number > 0) parsed.push({ ...result.data, number, sourceRow: rowIndex + 1 })
   })
+  finish(rows.length)
+  return parsed
 }
 function readAnswerFile(buffer: ArrayBuffer): AnswerRow[] {
   return sheetRows(buffer).flatMap((cells, rowIndex) => {
